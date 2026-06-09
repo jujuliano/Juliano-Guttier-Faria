@@ -1,0 +1,8 @@
+{
+  "name": "Quine midia indor",
+  "description": "Uma página web limpa que exibe um vídeo do YouTube em tela cheia com uma imagem do Dropbox sobreposta em um dos cantos, configurável com links personalizados.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
