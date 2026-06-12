@@ -45,4 +45,7 @@ export interface AppConfig {
   tvMode: boolean; // Enables low-spec optimizations (replaces hardware-heavy backdrop-filter blur with solid color background blocks to prevent lagginess and freezes)
   tvFontScale: number; // Overall UI scaling percentage for TV displays (e.g. 100 for default, 50 to 200)
   dpadNavigation: boolean; // Enables remote D-Pad arrow keys focus navigation for settings panel inputs and page elements
+  // Firebase Live Sync Properties
+  firebaseSyncEnabled: boolean; // Enables remote management synchronisation via cloud Firestore
+  firebaseChannelId: string; // The channel identifier or code used for remote real-time control (e.g. "loja_1")
 }

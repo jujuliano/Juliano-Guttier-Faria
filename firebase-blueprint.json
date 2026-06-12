@@ -1,0 +1,118 @@
+{
+  "entities": {
+    "SignageConfig": {
+      "title": "SignageConfig",
+      "description": "Configuration object for indoor media player",
+      "type": "object",
+      "properties": {
+        "driveFolderUrl": { "type": "string" },
+        "imageFit": { "type": "string", "enum": ["contain", "cover", "fill"] },
+        "imageInterval": { "type": "number" },
+        "imagePosition": { "type": "string" },
+        "imageAnimation": { "type": "string" },
+        "clockEnabled": { "type": "boolean" },
+        "clockPosition": { "type": "string" },
+        "clockColor": { "type": "string" },
+        "clockFontSize": { "type": "number" },
+        "clockShowSeconds": { "type": "boolean" },
+        "clockShowDate": { "type": "boolean" },
+        "clockShowDayOfWeek": { "type": "boolean" },
+        "clockFontFamily": { "type": "string" },
+        "imageOverlayEnabled": { "type": "boolean" },
+        "imageOverlayPosition": { "type": "string" },
+        "imageOverlaySize": { "type": "number" },
+        "imageOverlayOpacity": { "type": "number" },
+        "imageOverlayTargetUrl": { "type": "string" },
+        "backgroundImageUrl": { "type": "string" },
+        "useDriveBackgroundImageUrl": { "type": "boolean" },
+        "backgroundImageDriveFileUrl": { "type": "string" },
+        "youtubeUrl": { "type": "string" },
+        "videoAutoplay": { "type": "boolean" },
+        "videoLoop": { "type": "boolean" },
+        "videoMuted": { "type": "boolean" },
+        "videoControls": { "type": "boolean" },
+        "tickerEnabled": { "type": "boolean" },
+        "tickerText": { "type": "string" },
+        "tickerPosition": { "type": "string" },
+        "tickerFontSize": { "type": "number" },
+        "tickerSpeed": { "type": "number" },
+        "tickerBgColor": { "type": "string" },
+        "tickerTextColor": { "type": "string" },
+        "useDriveTickerText": { "type": "boolean" },
+        "tickerDriveFileUrl": { "type": "string" },
+        "useDriveImageLink": { "type": "boolean" },
+        "imageLinkDriveFileUrl": { "type": "string" },
+        "useDriveYoutubeUrl": { "type": "boolean" },
+        "youtubeDriveFileUrl": { "type": "string" },
+        "hideUIWhenIdle": { "type": "boolean" },
+        "tvMode": { "type": "boolean" },
+        "tvFontScale": { "type": "number" },
+        "dpadNavigation": { "type": "boolean" },
+        "ownerId": { "type": "string", "description": "UID of the owner who created this configuration" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["driveFolderUrl", "youtubeUrl", "ownerId"]
+    },
+    "ScreenDevice": {
+      "title": "ScreenDevice",
+      "description": "Information about a playing screen connected to the dashboard",
+      "type": "object",
+      "properties": {
+        "deviceId": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "lastSeen": { "type": "string", "format": "date-time" },
+        "currentConfigId": { "type": "string" },
+        "appVersion": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["deviceId", "deviceName", "status"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile metadata",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastLoginAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "email"]
+    },
+    "UserFile": {
+      "title": "UserFile",
+      "description": "Metadata for files uploaded by user to Firebase Storage",
+      "type": "object",
+      "properties": {
+        "fileId": { "type": "string" },
+        "userId": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileUrl": { "type": "string" },
+        "fileSize": { "type": "number" },
+        "fileType": { "type": "string" },
+        "uploadedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fileId", "userId", "fileName", "fileUrl"]
+    }
+  },
+  "firestore": {
+    "configs/{configId}": {
+      "schema": "SignageConfig",
+      "description": "Collection of signage configurations stored in Firestore"
+    },
+    "screens/{deviceId}": {
+      "schema": "ScreenDevice",
+      "description": "Collection of screen device heartbeats for remote monitoring"
+    },
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document isolated by UID"
+    },
+    "users/{userId}/files/{fileId}": {
+      "schema": "UserFile",
+      "description": "Collection of files metadata for files uploaded by a specific user"
+    }
+  }
+}

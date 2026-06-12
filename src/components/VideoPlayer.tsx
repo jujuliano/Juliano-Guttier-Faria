@@ -3,6 +3,7 @@ import { getYouTubeVideoId, transformImageSourceUrl } from '../utils/helpers';
 import { Play, Tv } from 'lucide-react';
 
 interface VideoPlayerProps {
+  key?: number | string;
   youtubeUrl: string;
   autoplay: boolean;
   loop: boolean;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AppConfig } from '../types';
 import { PRESETS, generateConfigUrl } from '../utils/helpers';
 import { 
@@ -15,9 +15,22 @@ import {
   Video,
   Eye,
   EyeOff,
-  AlertTriangle
+  AlertTriangle,
+  Cloud,
+  Database,
+  Users,
+  LogOut,
+  Key,
+  Upload,
+  Trash2,
+  FileText,
+  Loader2
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { auth, signInWithGoogle, signUpWithEmail, signInWithEmail, logOut, db, storage } from '../firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { collection, onSnapshot, query, where, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 
 interface SettingsPanelProps {
   config: AppConfig;
@@ -25,6 +38,7 @@ interface SettingsPanelProps {
   onReset: () => void;
   isOpen: boolean;
   onClose: () => void;
+  onLogout?: () => void;
 }
 
 export default function SettingsPanel({
@@ -33,9 +47,265 @@ export default function SettingsPanel({
   onReset,
   isOpen,
   onClose,
+  onLogout,
 }: SettingsPanelProps) {
-  const [activeTab, setActiveTab] = useState<'video' | 'overlay' | 'indoor'>('video');
+  const [activeTab, setActiveTab] = useState<'video' | 'overlay' | 'indoor' | 'cloud'>('video');
   const [copiedLink, setCopiedLink] = useState(false);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [onlineDevices, setOnlineDevices] = useState<any[]>([]);
+  const [onlineCount, setOnlineCount] = useState<number>(0);
+
+  // New Client-Side State for file lists & upload
+  const [userFiles, setUserFiles] = useState<any[]>([]);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  // Email/Password Auth State
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
+  const [authDisplayName, setAuthDisplayName] = useState('');
+  const [isSignUpMode, setIsSignUpMode] = useState(false);
+  const [authErrorAlert, setAuthErrorAlert] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Monitor auth state within Settings Panel as well
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (usr) => {
+      setFirebaseUser(usr);
+    });
+    return () => unsub();
+  }, []);
+
+  // Monitor user configuration files on Firestore (real-time user specific file metadata indexing)
+  useEffect(() => {
+    if (!firebaseUser) {
+      setUserFiles([]);
+      return;
+    }
+    const filesCollectionRef = collection(db, 'users', firebaseUser.uid, 'files');
+    const unsub = onSnapshot(filesCollectionRef, (snapshot) => {
+      const files = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      files.sort((a: any, b: any) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+      setUserFiles(files);
+    }, (error) => {
+      console.warn("Could not load user's files list from subcollection:", error);
+    });
+
+    return () => unsub();
+  }, [firebaseUser]);
+
+  // Monitor connected signage screens heartbeats from the configs channel
+  useEffect(() => {
+    if (!config.firebaseSyncEnabled || !config.firebaseChannelId) {
+      return;
+    }
+    const screensRef = collection(db, 'screens');
+    const q = query(screensRef, where('currentConfigId', '==', config.firebaseChannelId));
+    
+    // Listening in real-time to active devices
+    const unsub = onSnapshot(q, (snapshot) => {
+      const docs = snapshot.docs.map(d => d.data());
+      // Sort with newest seen first
+      docs.sort((a: any, b: any) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
+      setOnlineDevices(docs);
+      setOnlineCount(docs.filter((d: any) => {
+        const diffMs = new Date().getTime() - new Date(d.lastSeen).getTime();
+        return diffMs <= 180000; // updated in the last 3 minutes counts as online
+      }).length);
+    }, (err) => {
+      console.warn("Could not load reporting devices for monitor HUD:", err);
+    });
+
+    return () => unsub();
+  }, [config.firebaseSyncEnabled, config.firebaseChannelId]);
+
+  const handleFirebaseLogin = async () => {
+    try {
+      const user = await signInWithGoogle();
+      if (user) {
+        // Automatically provision & sync user account document in Firestore upon login
+        const userDocRef = doc(db, 'users', user.uid);
+        await setDoc(userDocRef, {
+          userId: user.uid,
+          email: user.email || '',
+          displayName: user.displayName || 'Administrador',
+          photoURL: user.photoURL || '',
+          lastLoginAt: new Date().toISOString(),
+          createdAt: new Date().toISOString()
+        }, { merge: true });
+      }
+    } catch (e) {
+      alert("Erro ao efetuar login com o Google. Certifique-se de que popups não estão bloqueados.");
+    }
+  };
+
+  const handleFirebaseLogout = async () => {
+    try {
+      await logOut();
+      if (onLogout) {
+        onLogout();
+      }
+    } catch (e) {
+      console.warn("Logout error:", e);
+    }
+  };
+
+  const handleEmailAndPasswordAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthErrorAlert(null);
+    setAuthLoading(true);
+
+    const emailClean = authEmail.trim();
+    const passwordClean = authPassword;
+    const nameClean = authDisplayName.trim();
+
+    if (!emailClean || !passwordClean) {
+      setAuthErrorAlert("Por favor, preencha todos os campos obrigatórios.");
+      setAuthLoading(false);
+      return;
+    }
+
+    if (isSignUpMode) {
+      if (passwordClean.length < 6) {
+        setAuthErrorAlert("A senha deve ter pelo menos 6 caracteres.");
+        setAuthLoading(false);
+        return;
+      }
+      if (passwordClean !== authConfirmPassword) {
+        setAuthErrorAlert("As senhas não coincidem.");
+        setAuthLoading(false);
+        return;
+      }
+      if (!nameClean) {
+        setAuthErrorAlert("Por favor, informe seu nome.");
+        setAuthLoading(false);
+        return;
+      }
+
+      try {
+        const user = await signUpWithEmail(emailClean, passwordClean, nameClean);
+        if (user) {
+          const userDocRef = doc(db, 'users', user.uid);
+          await setDoc(userDocRef, {
+            userId: user.uid,
+            email: user.email || emailClean,
+            displayName: nameClean,
+            photoURL: '',
+            lastLoginAt: new Date().toISOString(),
+            createdAt: new Date().toISOString()
+          }, { merge: true });
+          
+          setAuthEmail('');
+          setAuthPassword('');
+          setAuthConfirmPassword('');
+          setAuthDisplayName('');
+          setAuthErrorAlert(null);
+        }
+      } catch (err: any) {
+        console.error("Email registration error:", err);
+        let msg = "Falha ao criar conta. Verifique os dados.";
+        if (err.code === 'auth/email-already-in-use') {
+          msg = "Este e-mail já está em uso.";
+        } else if (err.code === 'auth/invalid-email') {
+          msg = "E-mail inválido.";
+        } else if (err.code === 'auth/weak-password') {
+          msg = "A senha deve conter no mínimo 6 caracteres.";
+        } else if (err.message) {
+          msg = err.message;
+        }
+        setAuthErrorAlert(msg);
+      } finally {
+        setAuthLoading(false);
+      }
+    } else {
+      try {
+        const user = await signInWithEmail(emailClean, passwordClean);
+        if (user) {
+          const userDocRef = doc(db, 'users', user.uid);
+          await setDoc(userDocRef, {
+            userId: user.uid,
+            email: user.email || emailClean,
+            displayName: user.displayName || 'Administrador',
+            photoURL: user.photoURL || '',
+            lastLoginAt: new Date().toISOString()
+          }, { merge: true });
+
+          setAuthEmail('');
+          setAuthPassword('');
+          setAuthErrorAlert(null);
+        }
+      } catch (err: any) {
+        console.error("Email sign-in error:", err);
+        let msg = "Falha no login. Verifique seu e-mail e senha.";
+        if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+          msg = "E-mail ou senha incorretos ou inexistentes.";
+        } else if (err.code === 'auth/invalid-email') {
+          msg = "E-mail inválido.";
+        } else if (err.message) {
+          msg = err.message;
+        }
+        setAuthErrorAlert(msg);
+      } finally {
+        setAuthLoading(false);
+      }
+    }
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !firebaseUser) return;
+
+    setIsUploadingFile(true);
+    setFileError(null);
+
+    try {
+      const fileId = 'file_' + Math.random().toString(36).substring(2, 10);
+      const storageRef = ref(storage, `users/${firebaseUser.uid}/files/${fileId}_${file.name}`);
+      
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadUrl = await getDownloadURL(snapshot.ref);
+
+      const fileDocRef = doc(db, 'users', firebaseUser.uid, 'files', fileId);
+      await setDoc(fileDocRef, {
+        fileId: fileId,
+        userId: firebaseUser.uid,
+        fileName: file.name,
+        fileUrl: downloadUrl,
+        fileSize: file.size,
+        fileType: file.type,
+        uploadedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error("Failed uploading file:", error);
+      setFileError("Falha ao fazer upload do arquivo. Tente novamente.");
+    } finally {
+      setIsUploadingFile(false);
+    }
+  };
+
+  const handleFileDelete = async (fileId: string, fileUrl: string, fileName: string) => {
+    if (!firebaseUser) return;
+
+    try {
+      const fileDocRef = doc(db, 'users', firebaseUser.uid, 'files', fileId);
+      await deleteDoc(fileDocRef);
+
+      try {
+        const storageRef = ref(storage, `users/${firebaseUser.uid}/files/${fileId}_${fileName}`);
+        await deleteObject(storageRef);
+      } catch (storageErr) {
+        console.warn("Storage item was not found/deleted but Firestore doc is removed:", storageErr);
+      }
+    } catch (error) {
+      console.error("Failed to delete user file:", error);
+      alert("Falha ao remover o arquivo.");
+    }
+  };
+
 
   // TV Remote Keyboard D-pad focus & navigation manager
   useEffect(() => {
@@ -264,6 +534,18 @@ export default function SettingsPanel({
         >
           <Sliders size={13} />
           <span>MÍDIA INDOOR</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('cloud')}
+          className={`flex-1 py-1.5 text-[11px] font-semibold rounded-md transition-all flex flex-col items-center justify-center gap-1 cursor-pointer ${
+            activeTab === 'cloud'
+              ? 'bg-zinc-800 text-white shadow'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/10'
+          }`}
+          id="tab-btn-cloud"
+        >
+          <Database size={13} className="text-emerald-400" />
+          <span>NUVEM LIVE</span>
         </button>
       </div>
 
@@ -1460,9 +1742,387 @@ export default function SettingsPanel({
                     <ExternalLink size={14} />
                     <span>Copiar Link e Salvar Configuração</span>
                   </>
-                )}
+                )
+                }
               </button>
             </div>
+
+          </div>
+        )}
+
+        {activeTab === 'cloud' && (
+          <div className="space-y-5 animate-fadeIn" id="tab-cloud-content">
+            
+            {/* Status box */}
+            <div className={`p-4 rounded-xl border ${config.firebaseSyncEnabled ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-250' : 'bg-zinc-900/40 border-zinc-800 text-zinc-400'} space-y-2`}>
+              <div className="flex items-center gap-2">
+                <Database size={16} className={config.firebaseSyncEnabled ? 'text-emerald-400 animate-pulse' : 'text-zinc-500'} />
+                <span className="text-xs font-bold uppercase tracking-wider">Status do Servidor Nuvem</span>
+              </div>
+              <p className="text-[11px] leading-relaxed">
+                {config.firebaseSyncEnabled 
+                  ? 'Sincronização em tempo real ativada! Qualquer alteração neste painel será aplicada instantaneamente nas TVs configuradas com este mesmo código.'
+                  : 'Sincronização desativada. As alterações feitas neste painel só se aplicam ao navegador local.'
+                }
+              </p>
+            </div>
+
+            {/* Toggle cloud sync */}
+            <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800/80 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col pr-2">
+                  <span className="text-xs font-semibold text-zinc-200">Sincronização Nuvem (Live)</span>
+                  <span className="text-[10px] text-zinc-500">Transmita as configurações via Firebase em tempo real para as TVs</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => updateField('firebaseSyncEnabled', !config.firebaseSyncEnabled)}
+                  className={`w-10 h-5.5 rounded-full p-0.5 transition-colors duration-200 focus:outline-none shrink-0 cursor-pointer ${
+                    config.firebaseSyncEnabled ? 'bg-emerald-500' : 'bg-zinc-700'
+                  }`}
+                  id="toggle-firebase-sync"
+                >
+                  <div
+                    className={`w-4.5 h-4.5 rounded-full bg-white transition-transform duration-200 ${
+                      config.firebaseSyncEnabled ? 'translate-x-4.5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {config.firebaseSyncEnabled && (
+                <div className="space-y-3 pt-2 border-t border-zinc-800/60 animate-fadeIn">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Key size={12} className="text-blue-400" />
+                      Código do Canal (ID)
+                    </label>
+                    <input
+                      type="text"
+                      value={config.firebaseChannelId}
+                      onChange={(e) => updateField('firebaseChannelId', e.target.value.replace(/[^a-zA-Z0-9_\-]/g, ''))}
+                      className="w-full bg-zinc-950/80 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white placeholder-zinc-650 focus:outline-none focus:border-blue-500 pr-10 font-mono"
+                      placeholder="Ex: loja_estilo_x"
+                      id="input-firebase-channel-id"
+                    />
+                    <p className="text-[9.5px] text-zinc-500 leading-normal">
+                      Insira este mesmo código em qualquer outra tela de TV para que ela reflita instantaneamente o mesmo layout deste controle!
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Authentication management segment */}
+            <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800/80 space-y-4">
+              <div className="text-xs font-semibold text-zinc-400 flex items-center gap-1.5 border-b border-zinc-800/80 pb-2">
+                <Users size={14} className="text-indigo-400" />
+                <span>Perfil de Administrador</span>
+              </div>
+
+              {firebaseUser ? (
+                <div className="space-y-3.5 animate-fadeIn">
+                  <div className="flex items-center gap-3">
+                    {firebaseUser.photoURL ? (
+                      <img src={firebaseUser.photoURL} alt="Avatar" className="w-9 h-9 rounded-full border border-zinc-700" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center text-xs text-white font-bold font-sans">
+                        {firebaseUser.displayName?.charAt(0) || firebaseUser.email?.charAt(0) || 'A'}
+                      </div>
+                    )}
+                    <div className="flex-1 overflow-hidden">
+                      <h4 className="text-xs font-semibold text-white truncate">{firebaseUser.displayName || 'Administrador'}</h4>
+                      <p className="text-[10px] text-zinc-500 truncate font-mono">{firebaseUser.email}</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-zinc-950/60 p-2.5 rounded-lg border border-zinc-850 space-y-1 text-[10.5px]">
+                    <span className="text-zinc-500 block font-bold uppercase tracking-wider text-[9px]">Garantia de Segurança</span>
+                    <p className="text-zinc-400 leading-relaxed">
+                      Sua conta Google vincula com segurança a autoria do canal. Outras telas só podem ler este canal, garantindo que ninguém altere suas configurações externamente.
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={handleFirebaseLogout}
+                    className="w-full py-2 px-3 text-xs bg-zinc-800/90 hover:bg-zinc-700 transition-all rounded-lg text-red-400 flex items-center justify-center gap-1.5 cursor-pointer hover:shadow"
+                    id="btn-firebase-logout"
+                  >
+                    <LogOut size={13} />
+                    <span>Desconectar Conta</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4 animate-fadeIn">
+                  <p className="text-[11px] text-zinc-400 leading-relaxed">
+                    Acesse sua conta para gerenciar seu canal de controle e enviar arquivos multimídia privados com segurança.
+                  </p>
+
+                  <form onSubmit={handleEmailAndPasswordAuth} className="space-y-3">
+                    {isSignUpMode && (
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-zinc-500">Nome Completo</label>
+                        <input
+                          type="text"
+                          value={authDisplayName}
+                          onChange={(e) => setAuthDisplayName(e.target.value)}
+                          className="w-full bg-zinc-950/80 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                          placeholder="Administrador Principal"
+                        />
+                      </div>
+                    )}
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-zinc-500">Endereço de E-mail</label>
+                      <input
+                        type="email"
+                        value={authEmail}
+                        onChange={(e) => setAuthEmail(e.target.value)}
+                        className="w-full bg-zinc-950/80 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        placeholder="nome@empresa.com"
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-zinc-500">Senha de Acesso</label>
+                      <input
+                        type="password"
+                        value={authPassword}
+                        onChange={(e) => setAuthPassword(e.target.value)}
+                        className="w-full bg-zinc-950/80 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                        placeholder="Mínimo 6 dígitos"
+                        required
+                      />
+                    </div>
+
+                    {isSignUpMode && (
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-bold tracking-wider text-zinc-500">Confirmar Senha</label>
+                        <input
+                          type="password"
+                          value={authConfirmPassword}
+                          onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                          className="w-full bg-zinc-950/80 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                          placeholder="Repita a senha"
+                          required
+                        />
+                      </div>
+                    )}
+
+                    {authErrorAlert && (
+                      <p className="text-[10px] text-red-400 font-medium">{authErrorAlert}</p>
+                    )}
+
+                    <button
+                      type="submit"
+                      disabled={authLoading}
+                      className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 transition-all rounded-lg text-xs text-white font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {authLoading ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <span>{isSignUpMode ? 'Criar Nova Conta' : 'Entrar com Email'}</span>
+                      )}
+                    </button>
+                  </form>
+
+                  <div className="flex items-center justify-between text-[11px] pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSignUpMode(!isSignUpMode);
+                        setAuthErrorAlert(null);
+                      }}
+                      className="text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
+                    >
+                      {isSignUpMode ? 'Já possui uma conta? Acesse' : 'Não tem conta? Cadastre-se'}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-[10px] text-zinc-650 justify-center">
+                    <span className="h-px bg-zinc-800 flex-grow"></span>
+                    <span>OU SE PREFERIR</span>
+                    <span className="h-px bg-zinc-800 flex-grow"></span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleFirebaseLogin}
+                    className="w-full py-2 px-3 bg-zinc-800 hover:bg-zinc-750 transition-all rounded-lg text-xs text-white flex items-center justify-center gap-2 cursor-pointer border border-zinc-700/60"
+                    id="btn-firebase-login"
+                  >
+                    <Cloud size={13} className="text-zinc-400 shrink-0" />
+                    <span>Acessar via Login Google</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Private Files Management compartment (Firebase Storage + Firestore User Isolation) */}
+            <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800/80 space-y-4">
+              <div className="text-xs font-semibold text-zinc-400 flex items-center gap-1.5 border-b border-zinc-800/80 pb-2">
+                <Upload size={14} className="text-emerald-400" />
+                <span>Armazenamento de Arquivos Privados</span>
+              </div>
+
+              {firebaseUser ? (
+                <div className="space-y-3">
+                  <label className="flex flex-col items-center justify-center border border-dashed border-zinc-700 hover:border-emerald-500/70 rounded-xl p-5 cursor-pointer bg-black/20 transition-all hover:bg-emerald-950/5">
+                    <Upload size={24} className="text-zinc-500 hover:text-emerald-400 mb-1.5 transition-colors" />
+                    <span className="text-[11px] font-medium text-zinc-300">
+                      Clique ou arraste um arquivo para enviar
+                    </span>
+                    <span className="text-[9px] text-zinc-500 mt-1">
+                      Suporta imagens (.png, .jpg, .svg) e texto (.txt)
+                    </span>
+                    <input 
+                      type="file" 
+                      accept="image/*,text/plain" 
+                      onChange={handleFileUpload} 
+                      className="hidden" 
+                      disabled={isUploadingFile}
+                    />
+                  </label>
+
+                  {isUploadingFile && (
+                    <div className="flex items-center justify-center gap-2 text-[11px] text-emerald-400 font-mono animate-pulse">
+                      <Loader2 size={13} className="animate-spin" />
+                      <span>Fazendo upload do arquivo...</span>
+                    </div>
+                  )}
+
+                  {fileError && (
+                    <p className="text-[10px] text-red-400 text-center">{fileError}</p>
+                  )}
+
+                  {/* Files list */}
+                  <div className="space-y-2">
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-bold block pt-1">
+                      Seus Arquivos ({userFiles.length})
+                    </span>
+
+                    {userFiles.length === 0 ? (
+                      <p className="text-[10px] text-zinc-500 italic text-center py-2">
+                        Nenhum arquivo enviado. Utilize o botão acima para enviar arquivos diretamente para o seu painel de forma segura!
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1" id="private-files-storage-list">
+                        {userFiles.map((file: any) => (
+                          <div key={file.fileId} className="flex flex-col gap-1.5 p-2 rounded bg-black/40 border border-zinc-850">
+                            <div className="flex items-center justify-between text-[11px] gap-2">
+                              <div className="flex items-center gap-1.5 truncate">
+                                {file.fileType?.includes('image') ? (
+                                  <ImageIcon size={12} className="text-emerald-400 shrink-0" />
+                                ) : (
+                                  <FileText size={12} className="text-zinc-400 shrink-0" />
+                                )}
+                                <span className="text-zinc-200 font-medium truncate" title={file.fileName}>
+                                  {file.fileName}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() => handleFileDelete(file.fileId, file.fileUrl, file.fileName)}
+                                className="p-1 hover:bg-zinc-800 text-zinc-400 hover:text-red-400 rounded transition-all cursor-pointer"
+                                title="Excluir arquivo permanentemente"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-2 border-t border-zinc-900/60 pt-1.5 text-[9.5px]">
+                              <span className="text-zinc-500">
+                                {file.fileSize ? (file.fileSize / 1024).toFixed(1) + ' KB' : ''}
+                              </span>
+                              
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  onClick={() => {
+                                    updateField('backgroundImageUrl', file.fileUrl);
+                                    updateField('useDriveBackgroundImageUrl', false);
+                                    updateField('backgroundType', 'image');
+                                    alert(`Configurado! A imagem "${file.fileName}" foi aplicada como plano de fundo.`);
+                                  }}
+                                  className="px-1.5 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-black border border-emerald-500/20 hover:border-transparent transition-all cursor-pointer font-medium uppercase text-[8.5px]"
+                                >
+                                  Aplicar no Fundo
+                                </button>
+                                
+                                <button
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(file.fileUrl);
+                                    alert('Link direto copiado para a área de transferência!');
+                                  }}
+                                  className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-all cursor-pointer font-medium uppercase text-[8.5px]"
+                                >
+                                  Copiar URL
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-zinc-950/40 p-3 rounded-lg border border-zinc-850/60 text-[10.5px] text-zinc-500 text-center leading-normal">
+                  Conecte uma conta de Administrador usando o login do Google logo acima para habilitar o envio e gerenciamento de seus próprios arquivos multimídia privados em nuvem.
+                </div>
+              )}
+            </div>
+
+            {/* Monitoring Online Connected TVs HUD */}
+            {config.firebaseSyncEnabled && (
+              <div className="p-4 rounded-xl bg-zinc-900/60 border border-zinc-800/80 space-y-3.5">
+                <div className="text-xs font-semibold text-zinc-400 flex items-center justify-between border-b border-zinc-800/80 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    <Users size={14} className="text-teal-400 animate-pulse" />
+                    <span>Telas Conectadas Ativas</span>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold text-teal-400 bg-teal-500/10 px-1.5 py-0.5 rounded border border-teal-500/25">
+                    {onlineCount} {onlineCount === 1 ? 'tela online' : 'telas online'}
+                  </span>
+                </div>
+
+                {onlineDevices.length === 0 ? (
+                  <p className="text-[10px] text-zinc-500 italic text-center py-2">
+                    Aguardando sinal de telas ou TVs conectando...
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-[140px] overflow-y-auto pr-1" id="screens-dashboard-hub">
+                    {onlineDevices.map((device: any) => {
+                      const minutesDiff = Math.round((new Date().getTime() - new Date(device.lastSeen).getTime()) / 60000);
+                      const isStale = minutesDiff > 5;
+                      return (
+                        <div key={device.deviceId} className="flex items-center justify-between p-2 rounded bg-black/40 border border-zinc-850 text-[10.5px]">
+                          <div className="flex items-center gap-2 truncate">
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isStale ? 'bg-amber-500' : 'bg-teal-400 animate-pulse'}`} />
+                            <span className="text-zinc-200 font-medium truncate">{device.deviceName}</span>
+                          </div>
+                          <span className="text-zinc-500 font-mono text-[9.5px]">
+                            {isStale ? `inativo há ${minutesDiff}m` : 'ativo agora'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-[9.5px] text-zinc-500 leading-tight">
+                  Telas ativas sincronizadas neste canal de controle (`{config.firebaseChannelId}`) reportam status via nuvem a cada 15 segundos.
+                </p>
+              </div>
+            )}
+
+            {/* Quick deployment instructions */}
+            {config.firebaseSyncEnabled && (
+              <div className="p-3 bg-gradient-to-r from-teal-950/20 to-zinc-950/40 border border-teal-500/25 rounded-xl space-y-1.5">
+                <span className="text-[10.5px] font-bold text-teal-300 block">💡 Ativar no telão</span>
+                <p className="text-[10px] text-zinc-400 leading-normal">
+                  No seu telão ou TV Box, adicione <code className="font-mono text-teal-400 bg-teal-500/15 px-1 py-0.5 rounded">?fbsync=1&fbchannel={config.firebaseChannelId}</code> ao final do link da URL.
+                </p>
+              </div>
+            )}
 
           </div>
         )}

@@ -252,6 +252,10 @@ export function parseUrlConfig(urlStr: string, baseConfig: AppConfig): AppConfig
     if (params.has('scale')) config.tvFontScale = Number(params.get('scale')) || config.tvFontScale;
     if (params.has('dpad')) config.dpadNavigation = params.get('dpad') === 'true' || params.get('dpad') === '1';
 
+    // Firebase Live Sync Optimizations
+    if (params.has('fbsync')) config.firebaseSyncEnabled = params.get('fbsync') === 'true' || params.get('fbsync') === '1';
+    if (params.has('fbchannel')) config.firebaseChannelId = decodeURIComponent(params.get('fbchannel') || 'default');
+
     // Background type and links
     if (params.has('bgtype')) {
       const bt = params.get('bgtype');
@@ -323,6 +327,10 @@ export function generateConfigUrl(baseUrl: string, config: AppConfig): string {
     url.searchParams.set('tvmode', config.tvMode ? '1' : '0');
     url.searchParams.set('scale', config.tvFontScale.toString());
     url.searchParams.set('dpad', config.dpadNavigation ? '1' : '0');
+
+    // Firebase Live Sync Properties
+    url.searchParams.set('fbsync', config.firebaseSyncEnabled ? '1' : '0');
+    url.searchParams.set('fbchannel', encodeURIComponent(config.firebaseChannelId || 'default'));
 
     return url.toString();
   } catch (e) {
@@ -420,4 +428,6 @@ export const DEFAULT_CONFIG: AppConfig = {
   tvMode: false, // Low-spec stability option (replaces CPU-demanding backdrop blurred layers with solid ones)
   tvFontScale: 100, // Multiplier for visual elements (50% to 200%)
   dpadNavigation: true, // Immediate TV Remote focus control
+  firebaseSyncEnabled: false, // Cloud synchronisation disabled by default for pure local configuration
+  firebaseChannelId: 'default', // Default global channel namespace
 };

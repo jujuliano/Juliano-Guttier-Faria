@@ -1,0 +1,122 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safe Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // SignageConfig Entity Validation Guard
+    function isValidSignageConfig(data) {
+      return data.ownerId is string &&
+             data.ownerId.size() <= 128 &&
+             data.driveFolderUrl is string &&
+             data.driveFolderUrl.size() <= 1000 &&
+             data.youtubeUrl is string &&
+             data.youtubeUrl.size() <= 1000;
+    }
+
+    // ScreenDevice Entity Validation Guard
+    function isValidScreenDevice(data) {
+      return data.deviceId is string &&
+             data.deviceId.size() <= 128 &&
+             data.deviceName is string &&
+             data.deviceName.size() <= 128 &&
+             data.status is string &&
+             data.status.size() <= 32;
+    }
+
+    // UserProfile Entity Validation Guard
+    function isValidUserProfile(data, uid) {
+      return data.userId == uid &&
+             data.email is string &&
+             data.email.size() <= 256;
+    }
+
+    // UserFile Entity Validation Guard
+    function isValidUserFile(data, uid) {
+      return data.fileId is string &&
+             data.fileId.size() <= 128 &&
+             data.userId == uid &&
+             data.fileName is string &&
+             data.fileName.size() <= 256 &&
+             data.fileUrl is string &&
+             data.fileUrl.size() <= 2048;
+    }
+
+    // Config Collection Access Rules
+    match /configs/{configId} {
+      // Screen TV boxes fetch configurations directly (read permissions must be public for simple TV headless mode)
+      allow read: if true;
+
+      allow create: if isSignedIn() &&
+                    isValidId(configId) &&
+                    incoming().ownerId == request.auth.uid &&
+                    isValidSignageConfig(incoming());
+
+      allow update: if isSignedIn() &&
+                    isValidId(configId) &&
+                    existing().ownerId == request.auth.uid &&
+                    incoming().ownerId == existing().ownerId &&
+                    isValidSignageConfig(incoming());
+
+      allow delete: if isSignedIn() &&
+                    isValidId(configId) &&
+                    existing().ownerId == request.auth.uid;
+    }
+
+    // Connected TV Screens Heartbeat & Active State Monitoring
+    match /screens/{deviceId} {
+      // Allows anyone or dashboard readers to check the device status
+      allow read: if true;
+
+      allow create, update: if isValidId(deviceId) &&
+                            incoming().deviceId == deviceId &&
+                            isValidScreenDevice(incoming());
+
+      allow delete: if isSignedIn();
+    }
+
+    // User Profile & User isolated Files Management rules
+    match /users/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+
+      allow create, update: if isSignedIn() &&
+                            request.auth.uid == userId &&
+                            isValidId(userId) &&
+                            isValidUserProfile(incoming(), userId);
+
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+
+      // Subcollection for storing documents metadata securely
+      match /files/{fileId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+
+        allow create, update: if isSignedIn() &&
+                              request.auth.uid == userId &&
+                              isValidId(fileId) &&
+                              isValidUserFile(incoming(), userId);
+
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+  }
+}
