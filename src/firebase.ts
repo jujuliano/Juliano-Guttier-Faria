@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -10,10 +12,24 @@ import {
 } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
-import firebaseConfig from '../firebase-applet-config.json';
+
+// Safe environment variables fallback. Prevents secret leakage and build failures on GitHub.
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "",
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || ""
+};
+
+if (!firebaseConfig.apiKey) {
+  console.warn("ATENÇÃO: A chave API do Firebase não está configurada nas variáveis de ambiente. Verifique o arquivo .env ou configure VITE_FIREBASE_API_KEY.");
+}
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || undefined); /* CRITICAL: The app will break without this line */
 export const storage = getStorage(app);
 export const auth = getAuth();
 export const googleProvider = new GoogleAuthProvider();
