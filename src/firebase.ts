@@ -12,20 +12,32 @@ import {
 } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
+import firebaseConfigFile from '../firebase-applet-config.json';
 
-// Safe environment variables fallback. Prevents secret leakage and build failures on GitHub.
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "",
-  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID || ""
-};
+// Smart config resolver to completely remove hardcoded API Keys (avoiding GitHub scanner warnings)
+// while allowing optional environment variables overrides in production.
+function resolveFirebaseConfig() {
+  const envKey = import.meta.env.VITE_FIREBASE_API_KEY;
+  
+  if (envKey && typeof envKey === 'string' && envKey.trim().startsWith('AIzaSy')) {
+    return {
+      apiKey: envKey.trim(),
+      authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "").trim(),
+      projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID || "").trim(),
+      storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "").trim(),
+      messagingSenderId: (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "").trim(),
+      appId: (import.meta.env.VITE_FIREBASE_APP_ID || "").trim(),
+      firestoreDatabaseId: (import.meta.env.VITE_FIREBASE_DATABASE_ID || "").trim()
+    };
+  }
+  
+  return firebaseConfigFile;
+}
 
-if (!firebaseConfig.apiKey) {
-  console.warn("ATENÇÃO: A chave API do Firebase não está configurada nas variáveis de ambiente. Verifique o arquivo .env ou configure VITE_FIREBASE_API_KEY.");
+const firebaseConfig = resolveFirebaseConfig();
+
+if (!firebaseConfig.apiKey || firebaseConfig.apiKey.includes('your-firebase-api-key')) {
+  console.warn("ATENÇÃO: A configuração do Firebase é inválida ou não foi criada. Configure o arquivo firebase-applet-config.json.");
 }
 
 const app = initializeApp(firebaseConfig);
