@@ -27,6 +27,17 @@ body {
   color: #eeeeee;
   margin: 0;
   padding: 0;
+  /* Mobile WebView layout and tactile feedback optimizations */
+  -webkit-touch-callout: none; /* Prevent standard popup on copy/hold of buttons */
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0); /* Eliminate Android default blue tap flash */
+  user-select: none; /* Prevent accidental text extraction selection blocks when dragging widgets */
+  -webkit-user-select: none;
+}
+
+/* Re-enable input text-select only for inputs & editable textareas */
+input, textarea {
+  user-select: text !important;
+  -webkit-user-select: text !important;
 }
 
 /* TV Optimization Mode: flat opaque colors bypass high GPU overhead of backdrop blur */
